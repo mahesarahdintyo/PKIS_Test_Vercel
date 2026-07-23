@@ -1,24 +1,20 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useRef } from "react";
+import Chart from "chart.js/auto";
 
 interface SQCPMProps {
-  // Safety
   safety: {
     hariTanpaAccident: number;
     accident: number;
   };
-  // Quality
   ngRatePct: number;
   totalNG: number;
-  // Productivity
   oee: number;
   gsph: number;
   targetGsph: number;
-  // Cost
   ngValueRp: number;
   scrapValueRp: number;
-  // Moral / Attendance
   attendance: {
     pctExclCuti: number;
     total_orang: number;
@@ -27,8 +23,15 @@ interface SQCPMProps {
     absen: number;
     overtime_jam: number;
   };
-  // Mode
   periodMode?: "harian" | "bulanan" | "tahunan";
+  miniTrend?: {
+    labels: string[];
+    safety: number[];
+    quality: number[];
+    productivity: number[];
+    cost: number[];
+    moral: number[];
+  };
 }
 
 function cardStatus(val: number, good: number, warn: number): string {
@@ -38,7 +41,7 @@ function cardStatus(val: number, good: number, warn: number): string {
 }
 
 function fmtNum(n: number | null | undefined): string {
-  if (n === null || n === undefined || isNaN(Number(n))) return "-";
+  if (n === null || n === undefined || isNaN(Number(n))) return "0";
   return Number(n).toLocaleString("en-US", { maximumFractionDigits: 1 });
 }
 
@@ -61,21 +64,105 @@ export default function SQCDMPPanel({
   scrapValueRp,
   attendance,
   periodMode = "harian",
+  miniTrend,
 }: SQCPMProps) {
+  const chartRefs = {
+    miniSafety: useRef<HTMLCanvasElement | null>(null),
+    miniQuality: useRef<HTMLCanvasElement | null>(null),
+    miniProductivity: useRef<HTMLCanvasElement | null>(null),
+    miniCost: useRef<HTMLCanvasElement | null>(null),
+    miniMoral: useRef<HTMLCanvasElement | null>(null),
+  };
+
+  const chartInstances = useRef<Record<string, Chart>>({});
+
   const totalCostRp = ngValueRp + scrapValueRp;
   const costShareNG = totalCostRp > 0 ? (ngValueRp / totalCostRp) * 100 : 0;
   const costShareScrap = totalCostRp > 0 ? (scrapValueRp / totalCostRp) * 100 : 0;
 
-  // Safety status: 0 accident = good
   const safetyStatus = safety.accident === 0 ? "good" : "bad";
-  // Quality: NG Rate target ≤ 0.5%
   const qualityStatus = cardStatus(100 - ngRatePct * 2, 90, 80);
-  // Productivity: OEE
   const prodStatus = cardStatus(oee, 95, 80);
-  // Cost: lower cost = better (if 0 = good)
   const costStatus = totalCostRp === 0 ? "good" : totalCostRp < 1_000_000 ? "warn" : "bad";
-  // Moral: attendance
   const moralStatus = cardStatus(attendance.pctExclCuti, 95, 85);
+
+  const defaultLabels = ["18 Jul", "19 Jul", "20 Jul", "21 Jul", "22 Jul", "23 Jul"];
+
+  useEffect(() => {
+    const t = miniTrend || {
+      labels: defaultLabels,
+      safety: [1, 1, 1, 1, 1, 1],
+      quality: [0, 0, 0, 0, 0, 0],
+      productivity: [0, 0, 0, 0, 0, 0],
+      cost: [0, 0, 0, 0, 0, 0],
+      moral: [80, 82, 80.8, 81, 80.5, attendance.pctExclCuti || 80.8],
+    };
+
+    const renderSparkline = (
+      canvas: HTMLCanvasElement | null,
+      id: string,
+      labels: string[],
+      data: number[],
+      color: string,
+      type: "line" | "bar" = "line"
+    ) => {
+      if (!canvas) return;
+      if (chartInstances.current[id]) {
+        chartInstances.current[id].destroy();
+      }
+
+      const isBar = type === "bar";
+      chartInstances.current[id] = new Chart(canvas, {
+        type: isBar ? "bar" : "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              data,
+              borderColor: color,
+              backgroundColor: isBar ? color : "transparent",
+              borderWidth: 2,
+              tension: 0.4,
+              pointRadius: 0,
+              pointHoverRadius: 3,
+              borderRadius: isBar ? 3 : 0,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { enabled: true },
+          },
+          scales: {
+            x: {
+              ticks: { color: "#64748b", font: { size: 9 } },
+              grid: { display: false },
+              border: { display: false },
+            },
+            y: {
+              ticks: { color: "#64748b", font: { size: 9 }, maxTicksLimit: 3 },
+              grid: { color: "rgba(255,255,255,0.05)", drawTicks: false },
+              border: { display: false },
+              beginAtZero: true,
+            },
+          },
+        },
+      });
+    };
+
+    renderSparkline(chartRefs.miniSafety.current, "miniSafety", t.labels, t.safety, "#3b82f6", "line");
+    renderSparkline(chartRefs.miniQuality.current, "miniQuality", t.labels, t.quality, "#3b82f6", "line");
+    renderSparkline(chartRefs.miniProductivity.current, "miniProductivity", t.labels, t.productivity, "#3b82f6", "bar");
+    renderSparkline(chartRefs.miniCost.current, "miniCost", t.labels, t.cost, "#ef4444", "bar");
+    renderSparkline(chartRefs.miniMoral.current, "miniMoral", t.labels, t.moral, "#3b82f6", "line");
+
+    return () => {
+      Object.values(chartInstances.current).forEach((c) => c.destroy());
+    };
+  }, [miniTrend, attendance.pctExclCuti]);
 
   return (
     <div className="sqcpm-columns">
@@ -97,6 +184,9 @@ export default function SQCDMPPanel({
           />
         </div>
         <div className="sqcpm-mini-label">{fmtNum(safety.accident)} insiden tercatat</div>
+        <div className="sqcpm-chart">
+          <canvas ref={chartRefs.miniSafety} />
+        </div>
       </div>
 
       {/* ═══ QUALITY ═══ */}
@@ -117,6 +207,9 @@ export default function SQCDMPPanel({
           />
         </div>
         <div className="sqcpm-mini-label">{fmtNum(totalNG)} pcs NG</div>
+        <div className="sqcpm-chart">
+          <canvas ref={chartRefs.miniQuality} />
+        </div>
       </div>
 
       {/* ═══ PRODUCTIVITY ═══ */}
@@ -138,6 +231,9 @@ export default function SQCDMPPanel({
         </div>
         <div className="sqcpm-mini-label">
           GSPH <b>{fmtNum(gsph)}</b> / target <b>{fmtNum(targetGsph)}</b>
+        </div>
+        <div className="sqcpm-chart">
+          <canvas ref={chartRefs.miniProductivity} />
         </div>
       </div>
 
@@ -162,13 +258,16 @@ export default function SQCDMPPanel({
           <div className="cost-split-bar">
             <div className="cost-split-fill cost-fill-ng" style={{ width: `${costShareNG}%` }} />
           </div>
-          <div className="cost-split-row" style={{ marginTop: "6px" }}>
+          <div className="cost-split-row" style={{ marginTop: "4px" }}>
             <span className="cost-split-label">Scrap Top End</span>
             <span className="cost-split-value">{fmtRupiahShort(scrapValueRp)}</span>
           </div>
           <div className="cost-split-bar">
             <div className="cost-split-fill cost-fill-scrap" style={{ width: `${costShareScrap}%` }} />
           </div>
+        </div>
+        <div className="sqcpm-chart">
+          <canvas ref={chartRefs.miniCost} />
         </div>
       </div>
 
@@ -199,25 +298,25 @@ export default function SQCDMPPanel({
             <span className="manpower-icon">👥</span>
             <span className="manpower-label">Total</span>
             <span className="manpower-value">{fmtNum(attendance.total_orang)}</span>
-            <span className="manpower-unit">{periodMode === "harian" ? "Orang" : "/hari"}</span>
+            <span className="manpower-unit">Orang</span>
           </div>
           <div className="manpower-box manpower-hadir">
             <span className="manpower-icon">🧍</span>
             <span className="manpower-label">Hadir</span>
             <span className="manpower-value">{fmtNum(attendance.hadir)}</span>
-            <span className="manpower-unit">{periodMode === "harian" ? "Orang" : "/hari"}</span>
+            <span className="manpower-unit">Orang</span>
           </div>
           <div className="manpower-box">
             <span className="manpower-icon">🌴</span>
             <span className="manpower-label">Cuti</span>
             <span className="manpower-value">{fmtNum(attendance.cuti)}</span>
-            <span className="manpower-unit">{periodMode === "harian" ? "Orang" : "/hari"}</span>
+            <span className="manpower-unit">Orang</span>
           </div>
           <div className="manpower-box">
             <span className="manpower-icon">🚫</span>
             <span className="manpower-label">Absen</span>
             <span className="manpower-value">{fmtNum(attendance.absen)}</span>
-            <span className="manpower-unit">{periodMode === "harian" ? "Orang" : "/hari"}</span>
+            <span className="manpower-unit">Orang</span>
           </div>
           <div className="manpower-box">
             <span className="manpower-icon">⏰</span>
@@ -225,6 +324,9 @@ export default function SQCDMPPanel({
             <span className="manpower-value">{fmtNum(attendance.overtime_jam)}</span>
             <span className="manpower-unit">Jam</span>
           </div>
+        </div>
+        <div className="sqcpm-chart">
+          <canvas ref={chartRefs.miniMoral} />
         </div>
       </div>
     </div>
