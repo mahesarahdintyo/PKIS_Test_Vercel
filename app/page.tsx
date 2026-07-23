@@ -335,19 +335,49 @@ export default function DashboardPage() {
       });
     }
 
-    /* Donuts OEE */
+    /* Donuts OEE — with center text % */
+    const getCssVar = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+    const centerTextPlugin = {
+      id: "centerText",
+      afterDraw(chart: Chart) {
+        const { ctx, chartArea } = chart as any;
+        if (!chartArea) return;
+        const val = (chart.data.datasets[0]?.data?.[0] as number) || 0;
+        ctx.save();
+        ctx.font = "700 14px 'Inter', sans-serif";
+        ctx.fillStyle = getCssVar("--text");
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(
+          Math.round(val) + "%",
+          (chartArea.left + chartArea.right) / 2,
+          (chartArea.top + chartArea.bottom) / 2
+        );
+        ctx.restore();
+      },
+    };
+
     const renderDonut = (canvas: HTMLCanvasElement | null, id: string, val: number, color: string) => {
       if (!canvas) return;
       if (chartInstances.current[id]) chartInstances.current[id].destroy();
+      const v = Math.max(0, Math.min(100, val));
       chartInstances.current[id] = new Chart(canvas, {
         type: "doughnut",
-        data: { datasets: [{ data: [val, 100 - val], backgroundColor: [color, "#1e293b"], borderWidth: 0 }] },
-        options: { responsive: true, maintainAspectRatio: false, cutout: "72%", plugins: { legend: { display: false }, tooltip: { enabled: false } } },
+        data: { datasets: [{ data: [v, 100 - v], backgroundColor: [color, getCssVar("--panel-2") || "#1e293b"], borderWidth: 0 }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          ...(({ cutout: "72%" } as any)),
+        },
+        plugins: [centerTextPlugin],
       });
     };
-    renderDonut(donutAvailRef.current, "donutAvail", totals.availability,                                     "#38bdf8");
-    renderDonut(donutPerfRef.current,  "donutPerf",  totals.performanceFactor,                                "#2563eb");
-    renderDonut(donutQualRef.current,  "donutQual",  totals.stroke > 0 ? Math.max(0, 100 - ngRatePct) : 0,  "#3b82f6");
+
+    renderDonut(donutAvailRef.current, "donutAvail", totals.availability,       getCssVar("--sky")  || "#38bdf8");
+    renderDonut(donutPerfRef.current,  "donutPerf",  totals.performanceFactor,  getCssVar("--teal") || "#2563eb");
+    renderDonut(donutQualRef.current,  "donutQual",  totals.stroke > 0 ? Math.max(0, 100 - ngRatePct) : 0, getCssVar("--navy") || "#2563eb");
 
     return () => { Object.values(chartInstances.current).forEach((c) => c.destroy()); };
   }, [loading, totals, ngRatePct]);
@@ -356,6 +386,29 @@ export default function DashboardPage() {
   const fmtNum = (n: number | null | undefined) => {
     if (n === null || n === undefined || isNaN(Number(n))) return "0";
     return Number(n).toLocaleString("en-US", { maximumFractionDigits: 1 });
+  };
+
+  /* Smart OEE conclusion — mirrors vanilla oeeKesimpulan() */
+  const oeeKesimpulan = (): string => {
+    const a = totals.availability;
+    const p = totals.performanceFactor;
+    const q = totals.stroke > 0 ? Math.max(0, 100 - ngRatePct) : 0;
+    const oee = totals.oee;
+    if (oee === 0 && a === 0 && p === 0) return "Belum ada data produksi pada periode ini.";
+    const faktor = [
+      { nama: "Availability",  val: a, saran: "kurangi downtime & dandori" },
+      { nama: "Performance",   val: p, saran: "kejar GSPH mendekati target" },
+      { nama: "Quality",       val: q, saran: "tekan angka NG" },
+    ];
+    const terlemah = faktor.reduce((acc, cur) => (cur.val < acc.val ? cur : acc));
+    const level = oee >= 75 ? "baik" : oee >= 50 ? "cukup" : "perlu perhatian";
+    let s = `OEE ${fmtNum(oee)}% (${level}). `;
+    if (terlemah.val >= 95) {
+      s += "Ketiga faktor sudah tinggi dan seimbang.";
+    } else {
+      s += `Faktor terlemah: ${terlemah.nama} ${fmtNum(terlemah.val)}% — ${terlemah.saran}.`;
+    }
+    return s;
   };
   const statusClass = (d: any) => d.status === "OFFLINE" ? "status-idle" : d.oee >= 75 ? "status-running" : d.oee >= 50 ? "status-warn" : "status-stop";
   const statusLabel = (d: any) => d.status === "OFFLINE" ? "OFF" : d.oee >= 75 ? "GOOD" : d.oee >= 50 ? "FAIR" : "POOR";
@@ -573,11 +626,7 @@ export default function DashboardPage() {
                   <span className="oee-total-big-label">OEE Keseluruhan</span>
                 </div>
 
-                <p className="oee-kesimpulan">
-                  {totals.oee >= 85
-                    ? "✅ OEE dalam kondisi baik. Pertahankan performa ini."
-                    : "Belum ada data produksi pada periode ini."}
-                </p>
+                <p className="oee-kesimpulan">{oeeKesimpulan()}</p>
               </div>
             </div>
           </div>

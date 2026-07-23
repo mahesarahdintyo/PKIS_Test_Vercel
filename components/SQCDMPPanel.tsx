@@ -230,9 +230,17 @@ export default function SQCDMPPanel({
             <span className="cost-split-label">NG Inline</span>
             <span className="cost-split-value">{fmtRupiahShort(ngValueRp)}</span>
           </div>
-          <div className="cost-split-row" style={{ marginTop: "2px" }}>
+          <div className="cost-split-bar">
+            <div className="cost-split-fill cost-fill-ng"
+              style={{ width: `${ngValueRp + scrapValueRp > 0 ? (ngValueRp / (ngValueRp + scrapValueRp)) * 100 : 0}%` }} />
+          </div>
+          <div className="cost-split-row" style={{ marginTop: "4px" }}>
             <span className="cost-split-label">Scrap Top End</span>
             <span className="cost-split-value">{fmtRupiahShort(scrapValueRp)}</span>
+          </div>
+          <div className="cost-split-bar">
+            <div className="cost-split-fill cost-fill-scrap"
+              style={{ width: `${ngValueRp + scrapValueRp > 0 ? (scrapValueRp / (ngValueRp + scrapValueRp)) * 100 : 0}%` }} />
           </div>
         </div>
         <div className="sqcpm-chart">
