@@ -1048,9 +1048,22 @@ td.mono, .mono { font-family: var(--font-mono); }
 }
 
 /* ---------- Grid utama dashboard ---------- */
+/* Row 1: GSPH chart (wider) | Pareto | Line Status */
+.dash-main-grid.tv-row-1 {
+  display: grid;
+  grid-template-columns: 1.7fr 1fr 1.3fr;
+  gap: 14px;
+}
+/* Row 2: equal 3 columns */
+.dash-main-grid.tv-row-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+}
+/* fallback if no row class */
 .dash-main-grid {
   display: grid;
-  grid-template-columns: 1.6fr 1fr 1.1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 14px;
 }
 .dash-panel {
@@ -1073,19 +1086,24 @@ td.mono, .mono { font-family: var(--font-mono); }
   flex-shrink: 0;
 }
 .dash-chart-sm { height: 200px; position: relative; }
-.dash-panel .dash-chart-sm { flex: 1; height: auto; min-height: 180px; }
+.dash-panel .dash-chart-sm { flex: 1; height: auto; min-height: 160px; }
 
-/* Panel dengan tabel (Line Status, 10 Downtime Terburuk): tabel ikut
-   melebar mengisi sisa tinggi card, bukan menempel di atas saja. */
+/* Panel dengan tabel ikut melebar mengisi sisa tinggi card */
 .dash-panel .table-wrap {
   flex: 1;
   max-height: none;
+  overflow-y: auto;
 }
-.dash-panel .table-wrap table { width: 100%; height: 100%; }
-.dash-panel .table-wrap tbody tr { height: 1px; } /* trik: baris body berbagi rata sisa tinggi */
 
-/* Pareto bar: baris-barisnya ikut melebar mengisi sisa tinggi card */
-.dash-panel .pareto-row { flex: 1; }
+/* Empty state centered inside a panel */
+.dash-empty-center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 /* ---------- Pareto bar ---------- */
 .pareto-row {
@@ -1140,10 +1158,14 @@ td.mono, .mono { font-family: var(--font-mono); }
 }
 
 @media (max-width: 1200px) {
-  .dash-main-grid { grid-template-columns: 1fr 1fr; }
+  .dash-main-grid,
+  .dash-main-grid.tv-row-1,
+  .dash-main-grid.tv-row-3 { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 800px) {
-  .dash-main-grid { grid-template-columns: 1fr; }
+  .dash-main-grid,
+  .dash-main-grid.tv-row-1,
+  .dash-main-grid.tv-row-3 { grid-template-columns: 1fr; }
 }
 
 /* ---------- Kartu SQCDMP ---------- */
@@ -1525,16 +1547,19 @@ table.table-compact .status-badge { font-size: 9px; padding: 2px 7px; }
     gap: var(--row-gap);
   }
   .tv-grid > * { min-height: 0; }
-  .dash-main-grid { gap: 10px; min-height: 0; }
+  .dash-main-grid,
+  .dash-main-grid.tv-row-1,
+  .dash-main-grid.tv-row-3 { gap: 10px; min-height: 0; }
+  .dash-main-grid.tv-row-1 { grid-template-columns: 1.7fr 1fr 1.3fr; }
   .dash-main-grid.tv-row-3 { grid-template-columns: 1fr 1fr 1fr; }
-  .dash-panel { padding: 14px 16px; min-height: 0; display: flex; flex-direction: column; }
-  .dash-panel-title { margin-bottom: 8px; flex-shrink: 0; }
+  .dash-panel { padding: 12px 14px; min-height: 0; display: flex; flex-direction: column; }
+  .dash-panel-title { margin-bottom: 6px; flex-shrink: 0; }
 
   /* Grafik & tabel menyesuaikan tinggi baris, bukan tinggi tetap */
   .dash-chart-sm,
   .dash-panel .perf-chart-wrap { height: auto !important; flex: 1; min-height: 0; }
-  .tv-row-1 .table-wrap { flex: 1; min-height: 0; max-height: none; }
-  .tv-row-3 .table-wrap { flex: 1; min-height: 0; max-height: none; }
+  .tv-row-1 .table-wrap,
+  .tv-row-3 .table-wrap { flex: 1; min-height: 0; max-height: none; overflow-y: auto; }
 
   /* Pareto lebih padat */
   .pareto-row { margin-bottom: 5px; font-size: 11px; grid-template-columns: 110px 1fr 64px; }
