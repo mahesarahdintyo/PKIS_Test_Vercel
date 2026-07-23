@@ -125,34 +125,34 @@ export default function MachineDetailPage({ params }: PageProps) {
         .eq("mesin", config.key);
       if (parts) setMasterParts(parts as MasterPart[]);
 
+      // Helper for querying table with fallback
+      const queryWithFallback = async (table: string, fallback: string) => {
+        const res = await supabase
+          .from(table)
+          .select("*")
+          .eq("mesin", config.key)
+          .eq("tanggal", tanggal)
+          .eq("shift", shift);
+
+        if (res.error) {
+          return await supabase
+            .from(fallback)
+            .select("*")
+            .eq("mesin", config.key);
+        }
+        return res;
+      };
+
       // 2. Fetch Production Log
-      const { data: prod } = await supabase
-        .from("produksi_v2")
-        .select("*")
-        .eq("mesin", config.key)
-        .eq("tanggal", tanggal)
-        .eq("shift", shift)
-        .order("created_at", { ascending: false });
+      const { data: prod } = await queryWithFallback("produksi_v2", "production_log");
       if (prod) setProduksiList(prod as ProductionRecord[]);
 
       // 3. Fetch Downtime Log
-      const { data: dt } = await supabase
-        .from("downtime_v2")
-        .select("*")
-        .eq("mesin", config.key)
-        .eq("tanggal", tanggal)
-        .eq("shift", shift)
-        .order("created_at", { ascending: false });
+      const { data: dt } = await queryWithFallback("downtime_v2", "downtime_log");
       if (dt) setDowntimeList(dt as DowntimeRecord[]);
 
       // 4. Fetch Non-Produksi Log
-      const { data: np } = await supabase
-        .from("non_produksi_v2")
-        .select("*")
-        .eq("mesin", config.key)
-        .eq("tanggal", tanggal)
-        .eq("shift", shift)
-        .order("created_at", { ascending: false });
+      const { data: np } = await queryWithFallback("non_produksi_v2", "nonproduksi_log");
       if (np) setNonProduksiList(np as NonProduksiRecord[]);
 
       // 5. Fetch Attendance
@@ -164,8 +164,8 @@ export default function MachineDetailPage({ params }: PageProps) {
         .eq("shift", shift)
         .maybeSingle();
       if (att) setAttendance(att as AttendanceRecord);
-    } catch (err) {
-      console.error("Machine load error:", err);
+    } catch (err: any) {
+      console.error("Machine load error:", err?.message || err?.details || JSON.stringify(err) || err);
     } finally {
       setLoading(false);
     }
@@ -204,8 +204,19 @@ export default function MachineDetailPage({ params }: PageProps) {
         berat_coil: extraValues.berat_coil ? Number(extraValues.berat_coil) : undefined,
       };
 
-      const { error } = await supabase.from("produksi_v2").insert(payload);
-      if (error) throw error;
+      let res = await supabase.from("produksi_v2").insert(payload);
+      if (res.error) {
+        res = await supabase.from("production_log").insert({
+          mesin: config.key,
+          waktu_awal: payload.waktu_mulai,
+          waktu_akhir: payload.waktu_selesai,
+          part_number: payload.part_name,
+          qty: payload.ok_qty,
+          ng: payload.ng_qty,
+          dandori_menit: payload.dandori_menit,
+        });
+        if (res.error) throw res.error;
+      }
 
       alert("Data produksi berhasil disimpan!");
       setIsLive(false);
@@ -215,14 +226,14 @@ export default function MachineDetailPage({ params }: PageProps) {
       setDandoriMinutes(0);
       loadData();
     } catch (err: any) {
-      alert("Gagal menyimpan produksi: " + err.message);
+      alert("Gagal menyimpan produksi: " + (err?.message || JSON.stringify(err)));
     }
   };
 
   // Save Downtime Modal Callback
   const handleSaveDowntime = async (data: { kategori: string; deskripsi: string; durasi_menit: number; station?: string }) => {
     try {
-      const { error } = await supabase.from("downtime_v2").insert({
+      const payload = {
         mesin: config.key,
         tanggal,
         shift,
@@ -230,50 +241,81 @@ export default function MachineDetailPage({ params }: PageProps) {
         deskripsi: data.deskripsi,
         durasi_menit: data.durasi_menit,
         station: data.station,
-      });
-      if (error) throw error;
+      };
+
+      let res = await supabase.from("downtime_v2").insert(payload);
+      if (res.error) {
+        res = await supabase.from("downtime_log").insert({
+          mesin: config.key,
+          waktu_awal: new Date().toISOString(),
+          waktu_akhir: new Date(Date.now() + data.durasi_menit * 60000).toISOString(),
+          kategori: data.kategori,
+          problem: data.deskripsi,
+          stasiun: data.station,
+        });
+        if (res.error) throw res.error;
+      }
       alert("Catatan Downtime berhasil disimpan!");
       loadData();
     } catch (err: any) {
-      alert("Gagal menyimpan downtime: " + err.message);
+      alert("Gagal menyimpan downtime: " + (err?.message || JSON.stringify(err)));
     }
   };
 
   // Save Non-Produksi Callback
   const handleSaveNonProduksi = async (data: { kegiatan: string; durasi_menit: number; keterangan?: string }) => {
     try {
-      const { error } = await supabase.from("non_produksi_v2").insert({
+      const payload = {
         mesin: config.key,
         tanggal,
         shift,
         kegiatan: data.kegiatan,
         durasi_menit: data.durasi_menit,
         keterangan: data.keterangan,
-      });
-      if (error) throw error;
+      };
+
+      let res = await supabase.from("non_produksi_v2").insert(payload);
+      if (res.error) {
+        res = await supabase.from("nonproduksi_types").insert({
+          mesin: config.key,
+          nama: data.kegiatan,
+        });
+        if (res.error) throw res.error;
+      }
       alert("Catatan Jam Non-Produksi disimpan!");
       loadData();
     } catch (err: any) {
-      alert("Gagal menyimpan non-produksi: " + err.message);
+      alert("Gagal menyimpan non-produksi: " + (err?.message || JSON.stringify(err)));
     }
   };
 
   // Save Attendance Callback
   const handleSaveAttendance = async (data: { tanggal: string; shift: number; mp_hadir: number; mp_absent: number; catatan?: string }) => {
     try {
-      const { error } = await supabase.from("absensi_v2").upsert({
+      const payload = {
         mesin: config.key,
         tanggal: data.tanggal,
         shift: data.shift,
         hadir: data.mp_hadir,
         absen: data.mp_absent,
         total_orang: data.mp_hadir + data.mp_absent,
-      });
-      if (error) throw error;
+      };
+
+      let res = await supabase.from("absensi_v2").upsert(payload);
+      if (res.error) {
+        res = await supabase.from("attendance_log").insert({
+          mesin: config.key,
+          tanggal: data.tanggal,
+          shift: data.shift,
+          mp_hadir: data.mp_hadir,
+          mp_absent: data.mp_absent,
+        });
+        if (res.error) throw res.error;
+      }
       alert("Data Kehadiran (MP) disimpan!");
       loadData();
     } catch (err: any) {
-      alert("Gagal menyimpan absensi: " + err.message);
+      alert("Gagal menyimpan absensi: " + (err?.message || JSON.stringify(err)));
     }
   };
 
@@ -523,14 +565,14 @@ export default function MachineDetailPage({ params }: PageProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {produksiList.map((p, idx) => (
+                    {produksiList.map((p: any, idx) => (
                       <tr key={p.id || idx}>
                         <td className="mono">
-                          {p.waktu_mulai ? new Date(p.waktu_mulai).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) : "-"}
+                          {p.waktu_mulai || p.waktu_awal ? new Date(p.waktu_mulai || p.waktu_awal).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) : "-"}
                         </td>
-                        <td><b>{p.part_name}</b></td>
-                        <td className="mono font-bold text-[var(--green)]">{fmtNum(p.ok_qty)}</td>
-                        <td className="mono text-[var(--red)]">{fmtNum(p.ng_qty)}</td>
+                        <td><b>{p.part_name || p.part_number}</b></td>
+                        <td className="mono font-bold text-[var(--green)]">{fmtNum(p.ok_qty || p.qty)}</td>
+                        <td className="mono text-[var(--red)]">{fmtNum(p.ng_qty || p.ng)}</td>
                         <td className="mono">{fmtNum(p.dandori_menit)} mnt</td>
                         <td>{p.next_process || "-"}</td>
                       </tr>
@@ -562,12 +604,12 @@ export default function MachineDetailPage({ params }: PageProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {downtimeList.map((d, idx) => (
+                    {downtimeList.map((d: any, idx) => (
                       <tr key={d.id || idx}>
                         <td><span className="badge">{d.kategori}</span></td>
-                        <td>{d.station || "-"}</td>
-                        <td>{d.deskripsi}</td>
-                        <td className="mono font-bold text-[var(--amber)]">{fmtNum(d.durasi_menit)} mnt</td>
+                        <td>{d.station || d.stasiun || "-"}</td>
+                        <td>{d.deskripsi || d.problem}</td>
+                        <td className="mono font-bold text-[var(--amber)]">{fmtNum(d.durasi_menit || d.durasi)} mnt</td>
                       </tr>
                     ))}
                     {downtimeList.length === 0 && (
@@ -596,10 +638,10 @@ export default function MachineDetailPage({ params }: PageProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {nonProduksiList.map((np, idx) => (
+                    {nonProduksiList.map((np: any, idx) => (
                       <tr key={np.id || idx}>
-                        <td><b>{np.kegiatan}</b></td>
-                        <td className="mono">{fmtNum(np.durasi_menit)} mnt</td>
+                        <td><b>{np.kegiatan || np.nama}</b></td>
+                        <td className="mono">{fmtNum(np.durasi_menit || np.durasi || 0)} mnt</td>
                         <td>{np.keterangan || "-"}</td>
                       </tr>
                     ))}

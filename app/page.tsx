@@ -23,7 +23,6 @@ export default function DashboardPage() {
   const [shiftFilter, setShiftFilter] = useState("all");
 
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [machinesTanpaTarget, setMachinesTanpaTarget] = useState<string[]>([]);
   const [paretoDowntime, setParetoDowntime] = useState<any[]>([]);
   const [fleetTop10, setFleetTop10] = useState<any[]>([]);
 
@@ -68,31 +67,26 @@ export default function DashboardPage() {
         if (profData) setProfile(profData as Profile);
       }
 
-      // 2. Fetch Production data according to filter
-      let query = supabase.from("produksi_v2").select("*");
-      if (periodMode === "harian") {
-        query = query.eq("tanggal", tanggal);
-        if (shiftFilter !== "all") {
-          query = query.eq("shift", Number(shiftFilter));
-        }
-      } else if (periodMode === "bulanan") {
-        const start = `${tahunPilih}-${String(bulanPilih + 1).padStart(2, "0")}-01`;
-        const lastDay = new Date(tahunPilih, bulanPilih + 1, 0).getDate();
-        const end = `${tahunPilih}-${String(bulanPilih + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-        query = query.gte("tanggal", start).lte("tanggal", end);
-      } else {
-        query = query.gte("tanggal", `${tahunPilih}-01-01`).lte("tanggal", `${tahunPilih}-12-31`);
+      // Query Production Log (Primary: production_log, Fallback: produksi_v2)
+      let prodList: any[] = [];
+      let prodRes = await supabase.from("production_log").select("*");
+      if (prodRes.error) {
+        // Fallback to produksi_v2
+        prodRes = await supabase.from("produksi_v2").select("*");
+      }
+      if (prodRes.data) {
+        prodList = prodRes.data;
       }
 
-      const { data: prodList, error: prodErr } = await query;
-      if (prodErr) throw prodErr;
-
-      // 3. Fetch Downtime data
-      let dtQuery = supabase.from("downtime_v2").select("*");
-      if (periodMode === "harian") {
-        dtQuery = dtQuery.eq("tanggal", tanggal);
+      // Query Downtime Log (Primary: downtime_log, Fallback: downtime_v2)
+      let dtList: any[] = [];
+      let dtRes = await supabase.from("downtime_log").select("*");
+      if (dtRes.error) {
+        dtRes = await supabase.from("downtime_v2").select("*");
       }
-      const { data: dtList } = await dtQuery;
+      if (dtRes.data) {
+        dtList = dtRes.data;
+      }
 
       // Calculate totals
       let totalOK = 0;
@@ -109,18 +103,21 @@ export default function DashboardPage() {
 
       if (prodList && prodList.length > 0) {
         const activeMachinesSet = new Set<string>();
-        prodList.forEach((p) => {
-          activeMachinesSet.add(p.mesin);
-          totalOK += p.ok_qty || 0;
-          totalNG += p.ng_qty || 0;
-          totalStroke += (p.ok_qty || 0) + (p.ng_qty || 0);
+        prodList.forEach((p: any) => {
+          const mKey = p.mesin;
+          activeMachinesSet.add(mKey);
+          const ok = p.qty || p.ok_qty || 0;
+          const ng = p.ng || p.ng_qty || 0;
+          totalOK += ok;
+          totalNG += ng;
+          totalStroke += ok + ng;
           totalDandori += p.dandori_menit || 0;
 
-          if (perMachineMap[p.mesin]) {
-            perMachineMap[p.mesin].stroke += (p.ok_qty || 0) + (p.ng_qty || 0);
-            perMachineMap[p.mesin].ok += p.ok_qty || 0;
-            perMachineMap[p.mesin].ng += p.ng_qty || 0;
-            perMachineMap[p.mesin].status = "RUNNING";
+          if (perMachineMap[mKey]) {
+            perMachineMap[mKey].stroke += ok + ng;
+            perMachineMap[mKey].ok += ok;
+            perMachineMap[mKey].ng += ng;
+            perMachineMap[mKey].status = "RUNNING";
           }
         });
         activeLinesCount = activeMachinesSet.size;
@@ -128,13 +125,17 @@ export default function DashboardPage() {
 
       if (dtList && dtList.length > 0) {
         const dtAgg: Record<string, number> = {};
-        dtList.forEach((d) => {
-          totalDowntime += d.durasi_menit || 0;
-          if (perMachineMap[d.mesin]) {
-            perMachineMap[d.mesin].downtime += d.durasi_menit || 0;
+        dtList.forEach((d: any) => {
+          let mnt = d.durasi_menit || d.durasi || 0;
+          if (!mnt && d.waktu_awal && d.waktu_akhir) {
+            mnt = Math.round((new Date(d.waktu_akhir).getTime() - new Date(d.waktu_awal).getTime()) / 60000);
           }
-          const probKey = d.deskripsi || d.kategori || "Unspecified";
-          dtAgg[probKey] = (dtAgg[probKey] || 0) + (d.durasi_menit || 0);
+          totalDowntime += mnt;
+          if (perMachineMap[d.mesin]) {
+            perMachineMap[d.mesin].downtime += mnt;
+          }
+          const probKey = d.problem || d.deskripsi || d.kategori || "Unspecified";
+          dtAgg[probKey] = (dtAgg[probKey] || 0) + mnt;
         });
 
         // Pareto calculation
@@ -150,15 +151,21 @@ export default function DashboardPage() {
 
         // Top 10 fleet downtime
         const top10 = [...dtList]
-          .sort((a, b) => (b.durasi_menit || 0) - (a.durasi_menit || 0))
-          .slice(0, 10)
-          .map((d) => ({
-            mesin: d.mesin,
-            mesinLabel: MACHINES.find((m) => m.key === d.mesin)?.label || d.mesin,
-            kategori: d.kategori,
-            problem: d.deskripsi,
-            menit: d.durasi_menit,
-          }));
+          .map((d: any) => {
+            let mnt = d.durasi_menit || d.durasi || 0;
+            if (!mnt && d.waktu_awal && d.waktu_akhir) {
+              mnt = Math.round((new Date(d.waktu_akhir).getTime() - new Date(d.waktu_awal).getTime()) / 60000);
+            }
+            return {
+              mesin: d.mesin,
+              mesinLabel: MACHINES.find((m) => m.key === d.mesin)?.label || d.mesin,
+              kategori: d.kategori || "MESIN",
+              problem: d.problem || d.deskripsi || "-",
+              menit: mnt,
+            };
+          })
+          .sort((a, b) => b.menit - a.menit)
+          .slice(0, 10);
         setFleetTop10(top10);
       } else {
         setParetoDowntime([]);
@@ -185,8 +192,8 @@ export default function DashboardPage() {
 
       setMachineDataMap(perMachineMap);
       setLineAktif(activeLinesCount);
-    } catch (err) {
-      console.error("Dashboard error:", err);
+    } catch (err: any) {
+      console.error("Dashboard detail info:", err?.message || JSON.stringify(err) || err);
     } finally {
       setLoading(false);
     }
@@ -198,19 +205,24 @@ export default function DashboardPage() {
 
   const handleSaveAbsensi = async () => {
     try {
-      const { error } = await supabase.from("absensi_v2").insert({
+      const payload = {
         tanggal: absenForm.tanggal,
         shift: Number(absenForm.shift),
         total_orang: Number(absenForm.total_orang),
         hadir: Number(absenForm.hadir),
         absen: Number(absenForm.absen),
         overtime_jam: Number(absenForm.overtime_jam),
-      });
-      if (error) throw error;
+      };
+
+      let res = await supabase.from("attendance_log").insert(payload);
+      if (res.error) {
+        res = await supabase.from("absensi_v2").insert(payload);
+        if (res.error) throw res.error;
+      }
       alert("Absensi berhasil disimpan!");
       fetchDashboardData();
     } catch (err: any) {
-      alert("Gagal menyimpan absensi: " + err.message);
+      alert("Gagal menyimpan absensi: " + (err?.message || JSON.stringify(err)));
     }
   };
 
