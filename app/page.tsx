@@ -9,11 +9,11 @@ import { Profile } from "@/types/database";
 import Chart from "chart.js/auto";
 
 const MACHINES = [
-  { key: "tandem", label: "Tandem", slug: "tandem" },
-  { key: "blanking", label: "Blanking", slug: "blanking" },
-  { key: "transfer_2000t", label: "Transfer 2000t", slug: "transfer-2000t" },
-  { key: "transfer_800t", label: "Transfer 800t", slug: "transfer-800t" },
-  { key: "pc200t", label: "PC200t", slug: "pc200t" },
+  { key: "tandem", label: "Tandem", slug: "tandem", defaultTarget: 415 },
+  { key: "blanking", label: "Blanking", slug: "blanking", defaultTarget: 1888 },
+  { key: "transfer_2000t", label: "Transfer 2000t", slug: "transfer-2000t", defaultTarget: 868 },
+  { key: "transfer_800t", label: "Transfer 800t", slug: "transfer-800t", defaultTarget: 975 },
+  { key: "pc200t", label: "PC200t", slug: "pc200t", defaultTarget: 420 },
 ];
 
 export default function DashboardPage() {
@@ -30,13 +30,11 @@ export default function DashboardPage() {
   const [downtimeKategori, setDowntimeKategori] = useState<any[]>([]);
   const [machineDataMap, setMachineDataMap] = useState<Record<string, any>>({});
   const [lineAktif, setLineAktif] = useState(0);
-  const [machinesTanpaTarget, setMachinesTanpaTarget] = useState<string[]>([]);
-  const [dbStatusMsg, setDbStatusMsg] = useState<string | null>(null);
 
   const [totals, setTotals] = useState({
     gsph: 0, targetGsph: 0, performanceFactor: 0,
     okQty: 0, ng: 0, targetQty: 0,
-    availability: 100, downtimeMenit: 0,
+    availability: 0, downtimeMenit: 0,
     stroke: 0, dandoriMenit: 0, oee: 0,
     ngValueRp: 0,
   });
@@ -86,7 +84,6 @@ export default function DashboardPage() {
 
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
-    setDbStatusMsg(null);
     try {
       // 1. Profile
       const { data: { session } } = await supabase.auth.getSession();
@@ -143,7 +140,7 @@ export default function DashboardPage() {
       try {
         const safetyRes = await supabase.from("safety_log").select("*")
           .gte("tanggal", startDate).lte("tanggal", endDate);
-        if (safetyRes.data) {
+        if (safetyRes.data && safetyRes.data.length > 0) {
           accidentCount = safetyRes.data.filter((s: any) => s.kategori === "ACCIDENT").length;
           const totalPeriodDays = periodMode === "harian" ? 1
             : Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000) + 1;
@@ -214,12 +211,14 @@ export default function DashboardPage() {
       let activeLinesCount = 0;
       const perMachineMap: Record<string, any> = {};
       MACHINES.forEach((m) => {
-        perMachineMap[m.key] = { stroke: 0, ok: 0, ng: 0, downtime: 0, gsph: 0, targetGsph: 0, oee: 0, performanceFactor: 0, status: "OFFLINE" };
+        perMachineMap[m.key] = {
+          stroke: 0, ok: 0, ng: 0, downtime: 0, gsph: 0,
+          targetGsph: m.defaultTarget, oee: 0, performanceFactor: 0, status: "OFFLINE"
+        };
       });
 
       if (prodList.length > 0) {
         const activeMachinesSet = new Set<string>();
-        const missingTarget: string[] = [];
         prodList.forEach((p: any) => {
           const mKey = p.mesin;
           activeMachinesSet.add(mKey);
@@ -234,12 +233,10 @@ export default function DashboardPage() {
             perMachineMap[mKey].ok += ok;
             perMachineMap[mKey].ng += ng;
             perMachineMap[mKey].status = "RUNNING";
-            const tgsph = p.target_gsph || p.targetGsph || 0;
+            const tgsph = p.target_gsph || p.targetGsph || perMachineMap[mKey].targetGsph;
             perMachineMap[mKey].targetGsph = tgsph;
-            if (!tgsph && !missingTarget.includes(mKey)) missingTarget.push(mKey);
           }
         });
-        setMachinesTanpaTarget(missingTarget.map(k => MACHINES.find(m => m.key === k)?.label || k));
         activeLinesCount = activeMachinesSet.size;
       }
 
@@ -304,11 +301,11 @@ export default function DashboardPage() {
       MACHINES.forEach((m) => {
         const md = perMachineMap[m.key];
         const gsph = Math.round(md.stroke / (workMins / 60));
-        const tgsph = md.targetGsph || 0;
+        const tgsph = md.targetGsph;
         const perf = tgsph > 0 ? Math.min(100, Math.round((gsph / tgsph) * 100)) : 0;
-        const avail = Math.max(0, Math.round(100 - (md.downtime / workMins) * 100));
+        const avail = md.stroke > 0 || md.downtime > 0 ? Math.max(0, Math.round(100 - (md.downtime / workMins) * 100)) : 0;
         const ngRate = md.stroke > 0 ? ((md.ng / md.stroke) * 100) : 0;
-        const qual = Math.max(0, Math.round(100 - ngRate));
+        const qual = md.stroke > 0 ? Math.max(0, Math.round(100 - ngRate)) : 0;
         const oeeVal = Math.round((perf / 100) * (avail / 100) * (qual / 100) * 100);
         perMachineMap[m.key] = { ...md, gsph, targetGsph: tgsph, performanceFactor: perf, oee: oeeVal };
       });
@@ -333,10 +330,6 @@ export default function DashboardPage() {
 
       setMachineDataMap(perMachineMap);
       setLineAktif(activeLinesCount);
-
-      if (prodList.length === 0 && dtList.length === 0 && attList.length === 0) {
-        setDbStatusMsg("💡 Supabase terhubung! Belum ada data untuk periode tanggal ini. Silakan input data di menu Input Produksi/Attendance/Scrap/Safety.");
-      }
     } catch (err: any) {
       console.error("Dashboard error detail:", err?.message || JSON.stringify(err) || err);
     } finally {
@@ -366,7 +359,7 @@ export default function DashboardPage() {
           labels: hours,
           datasets: MACHINES.map((m, idx) => ({
             label: m.label,
-            data: hours.map(() => 0),
+            data: hours.map(() => null),
             borderColor: lineColors[idx % lineColors.length],
             backgroundColor: "transparent",
             tension: 0.4,
@@ -393,7 +386,7 @@ export default function DashboardPage() {
           },
           scales: {
             x: { ticks: { color: "#64748b", font: { size: 10 } }, grid: { display: false } },
-            y: { ticks: { color: "#64748b", font: { size: 10 }, maxTicksLimit: 4 }, grid: { color: "#334155" }, beginAtZero: true },
+            y: { ticks: { color: "#64748b", font: { size: 10 }, stepSize: 0.5 }, grid: { color: "#334155" }, beginAtZero: true, max: 1.0 },
           },
         },
       });
@@ -428,7 +421,7 @@ export default function DashboardPage() {
           },
           scales: {
             x: { stacked: true, ticks: { color: "#64748b", font: { size: 10 } }, grid: { display: false } },
-            y: { stacked: true, ticks: { color: "#64748b", font: { size: 10 }, maxTicksLimit: 4 }, grid: { color: "#334155" }, beginAtZero: true },
+            y: { stacked: true, ticks: { color: "#64748b", font: { size: 10 }, stepSize: 0.5 }, grid: { color: "#334155" }, beginAtZero: true, max: 1.0 },
           },
         },
       });
@@ -534,26 +527,9 @@ export default function DashboardPage() {
       </div>
 
       {loading ? (
-        <p className="empty-state">Memuat data dari Supabase...</p>
+        <p className="empty-state">Memuat data...</p>
       ) : (
         <div className="dash-body">
-          {/* Status Message Info */}
-          {dbStatusMsg && (
-            <div className="offline-banner" style={{ marginBottom: 12 }}>
-              {dbStatusMsg}
-            </div>
-          )}
-
-          {/* Warning: machines without target */}
-          {machinesTanpaTarget.length > 0 && (
-            <div className="error-msg">
-              ⚠️ <b>Target GSPH belum diisi</b> untuk:{" "}
-              <span>{machinesTanpaTarget.join(", ")}</span>.
-              Akibatnya <b>Performance &amp; OEE tampil 0%</b>.
-              Isi dulu di halaman mesin → tab <b>Master Data</b> → panel <b>Target GSPH</b> (khusus admin/leader).
-            </div>
-          )}
-
           {/* ══ 5 Kolom SQCPM ══ */}
           <SQCDMPPanel
             safety={safety}
@@ -583,7 +559,7 @@ export default function DashboardPage() {
               </div>
 
               {/* Pareto Downtime */}
-              <div className="dash-panel">
+              <div className="dash-panel" style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
                 <p className="dash-panel-title">PARETO DOWNTIME (MENIT)</p>
                 {paretoDowntime.length > 0 ? (
                   <div>
@@ -600,7 +576,9 @@ export default function DashboardPage() {
                     ))}
                   </div>
                 ) : (
-                  <p className="empty-state">Tidak ada downtime.</p>
+                  <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <p className="empty-state" style={{ padding: 0, margin: 0 }}>Tidak ada downtime.</p>
+                  </div>
                 )}
               </div>
 
@@ -625,7 +603,7 @@ export default function DashboardPage() {
                       {MACHINES.map((m) => {
                         const data = machineDataMap[m.key] || {
                           stroke: 0, gsph: 0, ng: 0, downtime: 0, status: "OFFLINE",
-                          targetGsph: 0, performanceFactor: 0, oee: 0,
+                          targetGsph: m.defaultTarget, performanceFactor: 0, oee: 0,
                         };
                         return (
                           <tr key={m.key}>
@@ -665,9 +643,9 @@ export default function DashboardPage() {
               </div>
 
               {/* 10 Downtime Terburuk Table */}
-              <div className="dash-panel">
+              <div className="dash-panel" style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
                 <p className="dash-panel-title">10 DOWNTIME TERBURUK</p>
-                <div className="table-wrap">
+                <div className="table-wrap" style={{ flex: 1, display: "flex", flexDirection: "column" }}>
                   <table className="table-compact">
                     <thead>
                       <tr>
@@ -677,22 +655,24 @@ export default function DashboardPage() {
                         <th>MENIT</th>
                       </tr>
                     </thead>
-                    <tbody>
-                      {fleetTop10.map((row, idx) => (
-                        <tr key={idx}>
-                          <td><span className="badge">{row.mesinLabel}</span></td>
-                          <td>{row.kategori}</td>
-                          <td style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.problem}</td>
-                          <td className="mono">{fmtNum(row.menit)}</td>
-                        </tr>
-                      ))}
-                      {fleetTop10.length === 0 && (
-                        <tr>
-                          <td colSpan={4} className="empty-state">Tidak ada downtime.</td>
-                        </tr>
-                      )}
-                    </tbody>
+                    {fleetTop10.length > 0 && (
+                      <tbody>
+                        {fleetTop10.map((row, idx) => (
+                          <tr key={idx}>
+                            <td><span className="badge">{row.mesinLabel}</span></td>
+                            <td>{row.kategori}</td>
+                            <td style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.problem}</td>
+                            <td className="mono">{fmtNum(row.menit)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    )}
                   </table>
+                  {fleetTop10.length === 0 && (
+                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <p className="empty-state" style={{ padding: 0, margin: 0 }}>Tidak ada downtime.</p>
+                    </div>
+                  )}
                 </div>
               </div>
 
